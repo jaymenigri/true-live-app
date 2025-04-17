@@ -33,10 +33,46 @@ function dividirResposta(texto, limite = 1000) {
 
 async function loadEmbeddings() {
   if (cachedData) return cachedData;
-const filePath = path.join(process.cwd(), 'data/fontes_categorizado.json');
-  const raw = fs.readFileSync(filePath, 'utf8');
-  cachedData = JSON.parse(raw);
-  return cachedData;
+  
+  // Tenta vários caminhos possíveis para encontrar o arquivo
+  const possiblePaths = [
+    path.join(__dirname, '../data/fontes_categorizado.json'),
+    path.join(process.cwd(), 'data/fontes_categorizado.json'),
+    path.join(process.cwd(), './data/fontes_categorizado.json'),
+    './data/fontes_categorizado.json',
+    '../data/fontes_categorizado.json'
+  ];
+  
+  let raw = null;
+  let usedPath = null;
+  
+  // Tenta cada caminho até encontrar o arquivo
+  for (const filePath of possiblePaths) {
+    try {
+      if (fs.existsSync(filePath)) {
+        raw = fs.readFileSync(filePath, 'utf8');
+        usedPath = filePath;
+        console.log(`✅ Arquivo encontrado em: ${filePath}`);
+        break;
+      }
+    } catch (error) {
+      console.error(`❌ Erro ao tentar caminho ${filePath}:`, error.message);
+    }
+  }
+  
+  if (!raw) {
+    console.error('❌ Arquivo fontes_categorizado.json não encontrado em nenhum caminho tentado');
+    return [];
+  }
+  
+  try {
+    cachedData = JSON.parse(raw);
+    console.log(`📚 Carregadas ${cachedData.length} perguntas da base de conhecimento`);
+    return cachedData;
+  } catch (error) {
+    console.error('❌ Erro ao fazer parse do JSON:', error.message);
+    return [];
+  }
 }
 
 async function findMostSimilarQuestion(pergunta) {
