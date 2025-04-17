@@ -76,19 +76,50 @@ async function loadEmbeddings() {
 }
 
 async function findMostSimilarQuestion(pergunta) {
-  const dados = await loadEmbeddings();
-  const embeddingPergunta = await getEmbedding(pergunta);
-
-  let maisSimilar = null;
-  let maiorSimilaridade = 0;
-
-  for (const item of dados) {
-    const sim = cosineSimilarity(embeddingPergunta, item.embedding);
-    if (sim > maiorSimilaridade) {
-      maiorSimilaridade = sim;
-      maisSimilar = { ...item, similarity: sim };
+  try {
+    console.log(`🔎 Buscando resposta para: "${pergunta}"`);
+    const dados = await loadEmbeddings();
+    
+    if (!dados || dados.length === 0) {
+      console.warn('⚠️ Base de conhecimento vazia ou não carregada');
+      return null;
     }
+    
+    console.log(`📚 Comparando com ${dados.length} perguntas na base de conhecimento`);
+    const embeddingPergunta = await getEmbedding(pergunta);
+
+    let maisSimilar = null;
+    let maiorSimilaridade = 0;
+
+    for (const item of dados) {
+      if (!item.embedding || !Array.isArray(item.embedding)) {
+        console.warn(`⚠️ Item sem embedding válido: ${item.pergunta}`);
+        continue;
+      }
+      
+      const sim = cosineSimilarity(embeddingPergunta, item.embedding);
+      if (sim > maiorSimilaridade) {
+        maiorSimilaridade = sim;
+        maisSimilar = { ...item, similarity: sim };
+      }
+    }
+    
+    // Limite mínimo de similaridade para considerar uma correspondência
+    const limiteMinimo = 0.4; // Reduzido para ser mais tolerante
+    
+    if (maisSimilar && maisSimilar.similarity >= limiteMinimo) {
+      console.log(`✅ Melhor correspondência: "${maisSimilar.pergunta}" (${maisSimilar.similarity.toFixed(3)})`);
+      return maisSimilar;
+    } else {
+      const similaridade = maisSimilar ? maisSimilar.similarity.toFixed(3) : 'N/A';
+      console.warn(`⚠️ Nenhuma correspondência acima do limite mínimo. Melhor similaridade: ${similaridade}`);
+      return null;
+    }
+  } catch (error) {
+    console.error('❌ Erro ao buscar pergunta similar:', error);
+    return null;
   }
+}
 
   return maisSimilar;
 }
