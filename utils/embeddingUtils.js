@@ -33,7 +33,7 @@ function dividirResposta(texto, limite = 1000) {
 
 async function loadEmbeddings() {
   if (cachedData) return cachedData;
-  const filePath = path.join(__dirname, '../data/fontes_categorizado.json');
+const filePath = path.join(process.cwd(), 'data/fontes_categorizado.json');
   const raw = fs.readFileSync(filePath, 'utf8');
   cachedData = JSON.parse(raw);
   return cachedData;
