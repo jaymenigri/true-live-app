@@ -4,15 +4,17 @@
   "description": "Atendimento automatizado via WhatsApp com IA sobre Israel e geopolítica",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test-rag": "node scripts/testRag.js",
+    "index-docs": "node scripts/indexDocuments.js"
   },
   "dependencies": {
     "express": "^4.18.2",
     "body-parser": "^1.20.2",
     "twilio": "^4.11.0",
     "openai": "^4.15.0",
-    "dotenv": "^16.3.1"
-    "fs-extra": "^11.1.1"
+    "dotenv": "^16.3.1",
+    "firebase-admin": "^11.11.0"
   },
   "engines": {
     "node": ">=18.0.0"
