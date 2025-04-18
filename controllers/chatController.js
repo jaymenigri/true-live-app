@@ -34,17 +34,31 @@ async function handleMessage(req, res) {
 
 async function processarResposta(texto, telefone) {
   try {
+    // Executar limpeza ocasional de conversas antigas (1% das vezes)
+    if (Math.random() < 0.01) {
+      await firebase.cleanupOldConversations(30); // Limpa conversas mais antigas que 30 dias
+    }
+    
     // Salvar mensagem do usuário no histórico
     await firebase.saveConversation(telefone, texto, true);
     
     // Buscar histórico recente para contexto
-    const historico = await firebase.getConversationHistory(telefone, 5);
+    const historico = await firebase.getConversationHistory(telefone, 8); // Aumentado para 8 mensagens
     
     // Gerar resposta com o sistema RAG
     const resultado = await generateResponse(texto, historico);
     
-    // Salvar resposta no histórico
-    await firebase.saveConversation(telefone, resultado.response, false);
+    // Salvar resposta no histórico com metadata adicional
+    await firebase.saveConversation(
+      telefone, 
+      resultado.response, 
+      false, 
+      { 
+        usedFallback: resultado.usedFallback,
+        documents: resultado.documents,
+        enrichedQuery: resultado.enrichedQuery
+      }
+    );
     
     // Configurar cliente Twilio para envio de mensagens
     const twilioClient = twilio(
