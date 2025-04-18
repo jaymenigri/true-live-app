@@ -53,13 +53,14 @@ async function getDocumentById(id) {
 }
 
 // Funções para conversas
-async function saveConversation(telefone, message, isUser = true) {
+async function saveConversation(telefone, message, isUser = true, metadata = {}) {
   try {
     const conversationId = telefone.replace(/\D/g, ''); // Remove não-dígitos
     const messageObj = {
       content: message,
       timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      isUser
+      isUser,
+      ...metadata
     };
     
     // Adicionar mensagem à conversa
@@ -71,7 +72,8 @@ async function saveConversation(telefone, message, isUser = true) {
     // Atualizar metadata da conversa
     await conversationsCollection.doc(conversationId).set({
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
-      telefone
+      telefone,
+      messageCount: admin.firestore.FieldValue.increment(1)
     }, { merge: true });
     
     return messageObj;
@@ -112,10 +114,38 @@ async function getConversationHistory(telefone, limit = 10) {
   }
 }
 
+// Nova função para limpar histórico antigo (manutenção)
+async function cleanupOldConversations(daysOld = 30) {
+  try {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+    
+    const oldConversations = await conversationsCollection
+      .where('lastUpdated', '<', cutoffDate)
+      .get();
+    
+    console.log(`🧹 Encontradas ${oldConversations.size} conversas antigas para limpeza`);
+    
+    const batch = db.batch();
+    oldConversations.docs.forEach(doc => {
+      batch.delete(doc.ref);
+    });
+    
+    await batch.commit();
+    console.log('✅ Limpeza de conversas antigas concluída');
+    
+    return oldConversations.size;
+  } catch (error) {
+    console.error('❌ Erro ao limpar conversas antigas:', error.message);
+    return 0;
+  }
+}
+
 module.exports = {
   saveDocument,
   getDocuments,
   getDocumentById,
   saveConversation,
-  getConversationHistory
+  getConversationHistory,
+  cleanupOldConversations
 };
