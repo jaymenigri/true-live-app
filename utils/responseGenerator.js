@@ -1,3 +1,12 @@
+// utils/responseGenerator.js
+const { OpenAI } = require('openai');
+const { searchDocuments } = require('./semanticSearch');
+const { classifyQuery } = require('./domainClassifier');
+const { buscarRespostaFallback } = require('./fallback');
+require('dotenv').config();
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
 async function generateResponse(query, conversationHistory = [], showSources = true) {
   try {
     console.log(`🤔 Gerando resposta para: "${query}"`);
@@ -14,15 +23,14 @@ async function generateResponse(query, conversationHistory = [], showSources = t
       console.log(`📜 Incluindo histórico de ${conversationHistory.length} mensagens no contexto`);
     }
     
-    // ... código existente para enriquecer consulta ...
-    
     // Passo 1: Verificar se a pergunta está no domínio
-    const isInDomain = await classifyQuery(enrichedQuery || query);
+    const isInDomain = await classifyQuery(query);
     
     if (!isInDomain) {
       console.log('🌐 Pergunta fora do domínio Israel/judaísmo. Usando fallback geral.');
+      const resposta = await buscarRespostaFallback(query, conversationContext);
       return {
-        response: await buscarRespostaFallback(enrichedQuery || query, conversationContext),
+        response: resposta,
         documents: [],
         usedFallback: true,
         source: "Conhecimento geral (fora do domínio especializado)"
@@ -30,13 +38,14 @@ async function generateResponse(query, conversationHistory = [], showSources = t
     }
     
     // Passo 2: Buscar documentos relevantes
-    const relevantDocs = await searchDocuments(enrichedQuery || query, 4);
+    const relevantDocs = await searchDocuments(query, 4);
     
     // Se não encontrou documentos relevantes
     if (relevantDocs.length === 0) {
       console.log('📚 Nenhum documento relevante encontrado. Usando fallback.');
+      const resposta = await buscarRespostaFallback(query, conversationContext);
       return {
-        response: await buscarRespostaFallback(enrichedQuery || query, conversationContext),
+        response: resposta,
         documents: [],
         usedFallback: true,
         source: "Conhecimento geral (sem documentos específicos)"
@@ -109,7 +118,6 @@ async function generateResponse(query, conversationHistory = [], showSources = t
       response: finalResponse,
       documents: relevantDocs.map(doc => ({ id: doc.id, source: doc.source })),
       usedFallback: false,
-      enrichedQuery: enrichedQuery !== query ? enrichedQuery : null,
       source: usedSources.join(', ')
     };
   } catch (error) {
@@ -122,3 +130,5 @@ async function generateResponse(query, conversationHistory = [], showSources = t
     };
   }
 }
+
+module.exports = { generateResponse };
