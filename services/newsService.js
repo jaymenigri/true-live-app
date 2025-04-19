@@ -11,13 +11,23 @@ const twilioClient = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
+// Headers para simular um navegador real
+const browserHeaders = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.5',
+  'Connection': 'keep-alive',
+  'Upgrade-Insecure-Requests': '1',
+  'Cache-Control': 'max-age=0'
+};
+
 // Fontes com URLs específicas
 const NEWS_SOURCES = [
-  { name: 'Jerusalem Post', url: 'https://www.jpost.com/', selector: '.article-title', linkSelector: 'a' },
-  { name: 'Times of Israel', url: 'https://www.timesofisrael.com/', selector: '.headline', linkSelector: 'a' },
-  { name: 'Israel Hayom', url: 'https://www.israelhayom.com/headlines/', selector: '.entry-title', linkSelector: 'a' },
-  { name: 'Arutz Sheva', url: 'https://www.israelnationalnews.com/', selector: '.text-right > article h2', linkSelector: 'a' },
-  { name: 'Ynet News', url: 'https://www.ynetnews.com/category/3082', selector: '.slotTitle', linkSelector: 'a' }
+  { name: 'Jerusalem Post', url: 'https://www.jpost.com/', selector: '.article-title, .headline, h2.title', linkSelector: 'a' },
+  { name: 'Times of Israel', url: 'https://www.timesofisrael.com/', selector: '.headline, .article-title, h2.title', linkSelector: 'a' },
+  { name: 'Israel Hayom', url: 'https://www.israelhayom.com/', selector: '.entry-title, .article-title, h2.title', linkSelector: 'a' },
+  { name: 'Arutz Sheva', url: 'https://www.israelnationalnews.com/', selector: 'h2, .article-title, .headline', linkSelector: 'a' },
+  { name: 'Ynet News', url: 'https://www.ynetnews.com/', selector: '.slotTitle, .title, h2', linkSelector: 'a' }
 ];
 
 async function fetchTopHeadlines() {
@@ -26,7 +36,11 @@ async function fetchTopHeadlines() {
   for (const source of NEWS_SOURCES) {
     try {
       console.log(`📰 Buscando manchetes de ${source.name}...`);
-      const response = await axios.get(source.url);
+      const response = await axios.get(source.url, { 
+        headers: browserHeaders,
+        timeout: 10000 // 10 segundos de timeout
+      });
+      
       const $ = cheerio.load(response.data);
       
       // Extrair manchete principal e link
@@ -70,18 +84,27 @@ async function selectBestHeadline(headlines) {
   if (headlines.length === 1) return headlines[0];
   
   // Verificar notícias já enviadas recentemente para evitar repetição
-  const recentNewsSnapshot = await firebase.db.collection('dailyNews')
-    .orderBy('timestamp', 'desc')
-    .limit(10)
-    .get();
-  
-  const recentTitles = recentNewsSnapshot.docs.map(doc => doc.data().title || '');
+  let recentTitles = [];
+  try {
+    const recentNewsSnapshot = await firebase.db.collection('dailyNews')
+      .orderBy('timestamp', 'desc')
+      .limit(10)
+      .get();
+    
+    recentTitles = recentNewsSnapshot.docs.map(doc => doc.data().title || '');
+  } catch (error) {
+    console.error('❌ Erro ao buscar notícias recentes:', error.message);
+    // Continuar mesmo com erro, apenas não haverá verificação de duplicatas
+  }
   
   // Filtrar manchetes já enviadas recentemente
   const uniqueHeadlines = headlines.filter(h => !recentTitles.includes(h.title));
   
   // Se todas as manchetes já foram enviadas, pegar a mais recente
   if (uniqueHeadlines.length === 0) return headlines[0];
+  
+  // Se houver apenas uma manchete única, use-a diretamente
+  if (uniqueHeadlines.length === 1) return uniqueHeadlines[0];
   
   // Usar a OpenAI para determinar a manchete mais relevante
   try {
@@ -108,13 +131,17 @@ async function selectBestHeadline(headlines) {
     });
     
     const selection = response.choices[0].message.content.trim();
-    const selectedIndex = parseInt(selection.match(/\d+/)[0]) - 1;
+    const match = selection.match(/\d+/);
     
-    if (selectedIndex >= 0 && selectedIndex < uniqueHeadlines.length) {
-      return uniqueHeadlines[selectedIndex];
-    } else {
-      return uniqueHeadlines[0];
+    if (match) {
+      const selectedIndex = parseInt(match[0]) - 1;
+      if (selectedIndex >= 0 && selectedIndex < uniqueHeadlines.length) {
+        return uniqueHeadlines[selectedIndex];
+      }
     }
+    
+    // Se não conseguir extrair um número válido, usar a primeira manchete
+    return uniqueHeadlines[0];
   } catch (error) {
     console.error('❌ Erro ao selecionar manchete:', error.message);
     return uniqueHeadlines[0];
@@ -124,11 +151,15 @@ async function selectBestHeadline(headlines) {
 // Função para extrair conteúdo do artigo (resumo)
 async function fetchArticleContent(url) {
   try {
-    const response = await axios.get(url);
+    const response = await axios.get(url, { 
+      headers: browserHeaders,
+      timeout: 10000 // 10 segundos de timeout
+    });
+    
     const $ = cheerio.load(response.data);
     
     // Tenta diferentes seletores comuns para parágrafos de artigos
-    const paragraphs = $('article p, .article-body p, .story-content p, .entry-content p').slice(0, 2);
+    const paragraphs = $('article p, .article-body p, .story-content p, .entry-content p, .article-content p, p').slice(0, 3);
     
     if (paragraphs.length === 0) {
       throw new Error("Não foi possível extrair o conteúdo do artigo");
@@ -207,13 +238,18 @@ async function generateAINews() {
     const titleMatch = newsContent.match(/^📰\s*(.+?)$/m);
     const title = titleMatch ? titleMatch[1].trim() : "Notícia do dia";
     
-    // Salvar a notícia no Firebase
-    await saveNews(newsContent, title, "", NEWS_SOURCES[Math.floor(Math.random() * NEWS_SOURCES.length)].name);
+    try {
+      // Salvar a notícia no Firebase
+      await saveNews(newsContent, title, "", NEWS_SOURCES[Math.floor(Math.random() * NEWS_SOURCES.length)].name);
+    } catch (error) {
+      console.error('❌ Erro ao salvar notícia gerada por IA:', error.message);
+      // Continuar mesmo com erro ao salvar
+    }
     
     return newsContent;
   } catch (error) {
     console.error('❌ Erro ao gerar notícia por IA:', error);
-    return null;
+    return "📰 Notícias de Israel\n\nHouve um problema ao gerar as notícias de hoje. Estamos trabalhando para resolver o problema o mais rápido possível.\n\nEquipe True Live";
   }
 }
 
@@ -237,7 +273,7 @@ async function saveNews(content, title, url, source) {
     return true;
   } catch (error) {
     console.error('❌ Erro ao salvar notícia:', error);
-    return false;
+    throw error; // Propagar erro para tratamento adequado
   }
 }
 
@@ -256,85 +292,149 @@ async function generateDailyNews() {
     // Selecionar a melhor manchete
     const selectedHeadline = await selectBestHeadline(headlines);
     
+    if (!selectedHeadline) {
+      console.warn('⚠️ Falha ao selecionar manchete, usando geração por IA');
+      return await generateAINews();
+    }
+    
     // Formatar a notícia
     let newsContent = `📰 ${selectedHeadline.title}\n\n`;
     
     // Buscar conteúdo da notícia, se tiver URL
+    let contentObtained = false;
     if (selectedHeadline.url) {
       try {
         const content = await fetchArticleContent(selectedHeadline.url);
-        newsContent += `${content}\n\n`;
+        if (content && content.length > 20) { // Verificar se o conteúdo é substancial
+          newsContent += `${content}\n\n`;
+          contentObtained = true;
+        }
       } catch (error) {
-        // Se falhar, gerar resumo com IA
-        const summary = await generateNewsSummary(selectedHeadline.title);
-        newsContent += `${summary}\n\n`;
+        // Erro será registrado dentro da função fetchArticleContent
+        // Continuar para o fallback
       }
-    } else {
-      // Se não tiver URL, gerar resumo com IA
-      const summary = await generateNewsSummary(selectedHeadline.title);
-      newsContent += `${summary}\n\n`;
     }
     
+    // Se não conseguiu obter conteúdo, gerar resumo com IA
+    if (!contentObtained) {
+      try {
+        const summary = await generateNewsSummary(selectedHeadline.title);
+        newsContent += `${summary}\n\n`;
+      } catch (error) {
+        // Se falhar ao gerar resumo, adicionar mensagem genérica
+        newsContent += "Este é um desenvolvimento importante relacionado a Israel. Leia mais detalhes no link abaixo.\n\n";
+      }
+    }
+    
+    // Adicionar link e fonte
     newsContent += `🔗 Leia mais: ${selectedHeadline.url || "Fonte indisponível"}\n`;
     newsContent += `Fonte: ${selectedHeadline.source}`;
     
-    // Salvar a notícia no Firebase
-    await saveNews(newsContent, selectedHeadline.title, selectedHeadline.url, selectedHeadline.source);
+    try {
+      // Salvar a notícia no Firebase
+      await saveNews(newsContent, selectedHeadline.title, selectedHeadline.url, selectedHeadline.source);
+    } catch (error) {
+      // Continuar mesmo com erro ao salvar
+      console.error('❌ Erro ao salvar notícia, mas continuando com o envio:', error.message);
+    }
     
     return newsContent;
   } catch (error) {
     console.error('❌ Erro ao gerar notícia diária:', error);
     // Fallback para geração por IA
-    return await generateAINews();
+    try {
+      return await generateAINews();
+    } catch (innerError) {
+      // Fallback final se tudo falhar
+      console.error('❌ Erro no fallback de IA:', innerError);
+      return "📰 Notícias de Israel\n\nHouve um problema ao gerar as notícias de hoje. Estamos trabalhando para resolver o problema o mais rápido possível.\n\nEquipe True Live";
+    }
   }
 }
 
 async function sendNewsToAllUsers() {
   try {
-    // Buscar a notícia mais recente
-    const newsSnapshot = await firebase.db.collection('dailyNews')
-      .orderBy('timestamp', 'desc')
-      .limit(1)
-      .get();
+    let newsContent = null;
     
-    if (newsSnapshot.empty) {
-      console.warn('⚠️ Nenhuma notícia disponível para envio');
+    // Buscar a notícia mais recente
+    try {
+      const newsSnapshot = await firebase.db.collection('dailyNews')
+        .orderBy('timestamp', 'desc')
+        .limit(1)
+        .get();
+      
+      if (!newsSnapshot.empty) {
+        const newsDoc = newsSnapshot.docs[0];
+        const news = newsDoc.data();
+        newsContent = news.content;
+      }
+    } catch (error) {
+      console.error('❌ Erro ao buscar notícia do Firebase:', error.message);
+    }
+    
+    // Se não encontrou notícia no Firebase, gerar uma nova
+    if (!newsContent) {
+      console.warn('⚠️ Nenhuma notícia disponível no Firebase, gerando uma nova');
+      newsContent = await generateDailyNews();
+      
+      if (!newsContent) {
+        console.error('❌ Não foi possível gerar uma notícia');
+        return 0;
+      }
+    }
+    
+    // Buscar todos os usuários ativos
+    let usersData = [];
+    try {
+      const usersSnapshot = await firebase.db.collection('conversations')
+        .where('lastUpdated', '>', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) // ativos nos últimos 30 dias
+        .get();
+      
+      console.log(`📊 Encontrados ${usersSnapshot.size} usuários ativos`);
+      usersData = usersSnapshot.docs.map(doc => doc.data());
+    } catch (error) {
+      console.error('❌ Erro ao buscar usuários:', error.message);
       return 0;
     }
     
-    const newsDoc = newsSnapshot.docs[0];
-    const news = newsDoc.data();
+    if (usersData.length === 0) {
+      console.warn('⚠️ Nenhum usuário ativo encontrado');
+      return 0;
+    }
     
-    // Buscar todos os usuários ativos
-    const usersSnapshot = await firebase.db.collection('conversations')
-      .where('lastUpdated', '>', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000)) // ativos nos últimos 30 dias
-      .get();
-    
-    console.log(`📊 Enviando notícia para ${usersSnapshot.size} usuários`);
+    console.log(`📊 Enviando notícia para ${usersData.length} usuários`);
     
     let successCount = 0;
-    for (const userDoc of usersSnapshot.docs) {
-      const userData = userDoc.data();
+    for (const userData of usersData) {
+      // Verificar se userData e userData.phone existem
+      if (!userData || !userData.phone) {
+        console.warn('⚠️ Dados de usuário inválidos:', userData);
+        continue;
+      }
       
       // Verificar configuração do usuário
-      const userId = userData.phone ? userData.phone.replace(/\D/g, '') : '';
-      
-      if (!userId) continue;
+      const userId = userData.phone.replace(/\D/g, '');
       
       try {
-        const userSettingsDoc = await firebase.db.collection('userSettings').doc(userId).get();
+        // Verificar se o usuário optou por não receber notícias
+        let receiveNews = true; // Por padrão, recebe notícias
         
-        // Se usuário optou por não receber notícias, pular
-        if (userSettingsDoc.exists && userSettingsDoc.data().receiveNews === false) {
-          console.log(`ℹ️ Usuário ${userId} optou por não receber notícias`);
-          continue;
+        try {
+          const userSettingsDoc = await firebase.db.collection('userSettings').doc(userId).get();
+          if (userSettingsDoc.exists && userSettingsDoc.data().receiveNews === false) {
+            console.log(`ℹ️ Usuário ${userId} optou por não receber notícias`);
+            continue;
+          }
+        } catch (error) {
+          console.warn(`⚠️ Erro ao verificar configurações do usuário ${userId}, assumindo padrão:`, error.message);
+          // Continuar com o padrão (recebeNews = true)
         }
         
         // Número de telefone no formato do Twilio
         const to = userData.phone.startsWith('whatsapp:') ? userData.phone : `whatsapp:${userData.phone}`;
         
         await twilioClient.messages.create({
-          body: news.content,
+          body: newsContent,
           from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
           to: to
         });
@@ -348,10 +448,23 @@ async function sendNewsToAllUsers() {
       }
     }
     
-    // Atualizar contador de entregas
-    await newsDoc.ref.update({
-      delivered: firebase.admin.firestore.FieldValue.increment(successCount)
-    });
+    // Tentar atualizar contador de entregas
+    try {
+      const newsSnapshot = await firebase.db.collection('dailyNews')
+        .orderBy('timestamp', 'desc')
+        .limit(1)
+        .get();
+      
+      if (!newsSnapshot.empty) {
+        const newsDoc = newsSnapshot.docs[0];
+        await newsDoc.ref.update({
+          delivered: firebase.admin.firestore.FieldValue.increment(successCount)
+        });
+      }
+    } catch (error) {
+      console.error('❌ Erro ao atualizar contador de entregas:', error.message);
+      // Continuar mesmo com erro
+    }
     
     console.log(`✅ Notícia enviada com sucesso para ${successCount} usuários`);
     return successCount;
