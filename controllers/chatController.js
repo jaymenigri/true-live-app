@@ -1,5 +1,4 @@
 const firebase = require('../services/firebaseService');
-const { enviarMensagem } = require('../utils/mensagemUtils');
 const twilio = require('twilio');
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -17,12 +16,12 @@ async function handleMessage(req, res) {
     return res.send('<Response></Response>');
   }
 
-  // Aqui seguem outras rotinas do seu chatbot...
-  await enviarMensagem(
-    twilioClient,
-    telefone,
-    `🤖 Comando não reconhecido. Envie /config para ver as opções disponíveis.`
-  );
+  await twilioClient.messages.create({
+    body: `🤖 Comando não reconhecido. Envie /config para ver as opções disponíveis.`,
+    from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+    to: telefone
+  });
+
   res.send('<Response></Response>');
 }
 
@@ -34,25 +33,26 @@ async function processarComandoConfig(telefone, mensagem) {
     const receiveNews = params.includes('on') || params.includes('sim') || params.includes('yes');
     await firebase.updateUserSettings(telefone, { receiveNews });
 
-    await enviarMensagem(
-      twilioClient,
-      telefone,
-      `✅ Configuração atualizada: recebimento de notícias ${receiveNews ? 'ativado' : 'desativado'}.`
-    );
+    await twilioClient.messages.create({
+      body: `✅ Configuração atualizada: recebimento de notícias ${receiveNews ? 'ativado' : 'desativado'}.`,
+      from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+      to: telefone
+    });
+
     return;
   }
 
-  // Mensagem padrão de ajuda se nenhum parâmetro válido for fornecido
-  await enviarMensagem(
-    twilioClient,
-    telefone,
-    `🔧 Comandos de configuração disponíveis:
-    
+  // Mensagem padrão de ajuda
+  await twilioClient.messages.create({
+    body: `🔧 Comandos de configuração disponíveis:
+
 /config fontes on - Ativar exibição de fontes
 /config fontes off - Desativar exibição de fontes
 /config noticias on - Ativar recebimento de notícias
-/config noticias off - Desativar recebimento de notícias`
-  );
+/config noticias off - Desativar recebimento de notícias`,
+    from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+    to: telefone
+  });
 }
 
 module.exports = {
