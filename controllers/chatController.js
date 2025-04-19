@@ -4,7 +4,6 @@ const firebase = require('../services/firebaseService');
 const domainClassifier = require('../utils/domainClassifier');
 const semanticSearch = require('../utils/semanticSearch');
 const responseGenerator = require('../utils/responseGenerator');
-const contextManager = require('../utils/contextManager');
 require('dotenv').config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
