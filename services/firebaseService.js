@@ -1,13 +1,3 @@
-
-const admin = require('firebase-admin');
-const serviceAccount = JSON.parse(process.env.FIREBASE_CREDENTIALS.replace(/\\n/g, '\n'));
-
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
-
-const db = admin.firestore();
-
 /**
  * Obtém as configurações do usuário
  * @param {string} telefone - Número de telefone do usuário
@@ -61,9 +51,9 @@ async function updateUserSettings(telefone, settings) {
   }
 }
 
-// Não esqueça de exportar as novas funções:
+// Adicione estas funções ao módulo de exportação
 module.exports = {
-  // ... exportações existentes
+  // ... suas exportações existentes
   getUserSettings,
   updateUserSettings
 };
