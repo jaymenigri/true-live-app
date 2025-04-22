@@ -21,43 +21,35 @@ const WHATSAPP_CHARACTER_LIMIT = 1600;
  */
 async function enviarMensagem(client, para, mensagem) {
   try {
-    const fromNumber = process.env.TWILIO_PHONE_NUMBER;
-
-    // Verificação da variável de ambiente
-    if (!fromNumber || !fromNumber.startsWith('whatsapp:+')) {
-      console.error('❌ TWILIO_PHONE_NUMBER inválido ou não configurado. Verifique as variáveis de ambiente no Heroku.');
-      return false;
-    }
-
     // Dividir mensagem em partes se for muito grande
-    const partes = [];
     if (mensagem.length <= WHATSAPP_CHARACTER_LIMIT) {
-      partes.push(mensagem);
+      await client.messages.create({
+        body: mensagem,
+        from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+        to: para
+      });
     } else {
+      // Dividir em múltiplas mensagens
+      const partes = [];
       for (let i = 0; i < mensagem.length; i += WHATSAPP_CHARACTER_LIMIT) {
         partes.push(mensagem.substring(i, i + WHATSAPP_CHARACTER_LIMIT));
       }
+      
+      // Enviar cada parte sequencialmente
+      for (const parte of partes) {
+        await client.messages.create({
+          body: parte,
+          from: `whatsapp:${process.env.TWILIO_PHONE_NUMBER}`,
+          to: para
+        });
+        
+        // Pequeno intervalo entre mensagens
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
     }
-
-    // Enviar cada parte sequencialmente
-    for (const parte of partes) {
-      console.log(`📤 Enviando mensagem para ${para} via ${fromNumber}`);
-      await client.messages.create({
-        body: parte,
-        from: fromNumber,
-        to: para
-      });
-      await new Promise(resolve => setTimeout(resolve, 500)); // intervalo entre partes
-    }
-
     return true;
   } catch (error) {
-    if (error.code === 21212) {
-      console.error(`❌ [Twilio Error 21212] Número 'From' inválido: ${process.env.TWILIO_PHONE_NUMBER}`);
-      console.error('➡️ Dica: Verifique se a sandbox está ativa e se o destinatário enviou a mensagem "join [código]" para o número do Twilio.');
-    } else {
-      console.error('❌ Erro ao enviar mensagem:', error);
-    }
+    console.error('❌ Erro ao enviar mensagem:', error);
     return false;
   }
 }
@@ -70,14 +62,16 @@ async function enviarMensagem(client, para, mensagem) {
  */
 async function processarComandoConfig(telefone, comando) {
   try {
+    // Extrair parâmetros do comando (ex: "/config fontes on")
     const params = comando.toLowerCase().split(' ').slice(1);
-
+    
     if (params.length === 0) {
+      // Enviar instruções de ajuda
       await enviarMensagem(
-        twilioClient,
-        telefone,
+        twilioClient, 
+        telefone, 
         `🔧 Comandos de configuração disponíveis:
-
+        
 /config fontes on - Ativar exibição de fontes
 /config fontes off - Desativar exibição de fontes
 /config noticias on - Ativar recebimento de notícias
@@ -85,53 +79,70 @@ async function processarComandoConfig(telefone, comando) {
       );
       return;
     }
-
+    
+    // Comando para configurar exibição de fontes
     if (params.includes('fontes') || params.includes('sources')) {
       const showSources = params.includes('on') || params.includes('sim') || params.includes('yes');
       await firebase.updateUserSettings(telefone, { showSources });
+      
       await enviarMensagem(
-        twilioClient,
-        telefone,
+        twilioClient, 
+        telefone, 
         `✅ Configuração atualizada: exibição de fontes ${showSources ? 'ativada' : 'desativada'}.`
       );
       return;
     }
-
+    
+    // Comando para configurar recebimento de notícias
     if (params.includes('noticias') || params.includes('news')) {
       const receiveNews = params.includes('on') || params.includes('sim') || params.includes('yes');
       await firebase.updateUserSettings(telefone, { receiveNews });
+      
       await enviarMensagem(
-        twilioClient,
-        telefone,
+        twilioClient, 
+        telefone, 
         `✅ Configuração atualizada: recebimento de notícias ${receiveNews ? 'ativado' : 'desativado'}.`
       );
       return;
     }
-
+    
+    // Comando não reconhecido
     await enviarMensagem(
-      twilioClient,
-      telefone,
+      twilioClient, 
+      telefone, 
       `❓ Comando de configuração não reconhecido. Digite /config para ver os comandos disponíveis.`
     );
   } catch (error) {
     console.error('❌ Erro ao processar comando de configuração:', error);
     await enviarMensagem(
-      twilioClient,
-      telefone,
+      twilioClient, 
+      telefone, 
       `❌ Erro ao processar comando. Por favor, tente novamente.`
     );
   }
 }
 
+/**
+ * Verifica se uma pergunta está dentro do domínio de interesse (Israel, judaísmo, etc.)
+ * @param {string} pergunta - Pergunta do usuário
+ * @returns {Promise<boolean>} - True se estiver no domínio
+ */
 async function verificarDominio(pergunta) {
   try {
-    return await domainClassifier.classificar(pergunta);
+    const dentroDoEscopo = await domainClassifier.classificar(pergunta);
+    return dentroDoEscopo;
   } catch (error) {
     console.error('❌ Erro ao verificar domínio da pergunta:', error);
+    // Em caso de erro, assumir que está no escopo para evitar frustração do usuário
     return true;
   }
 }
 
+/**
+ * Busca documentos relevantes para a pergunta
+ * @param {string} pergunta - Pergunta do usuário
+ * @returns {Promise<Array>} - Array de documentos relevantes com pontuações
+ */
 async function buscarDocumentosRelevantes(pergunta) {
   try {
     return await semanticSearch.buscar(pergunta);
@@ -141,6 +152,14 @@ async function buscarDocumentosRelevantes(pergunta) {
   }
 }
 
+/**
+ * Gera resposta baseada em documentos e contexto
+ * @param {string} pergunta - Pergunta do usuário
+ * @param {Array} documentos - Documentos relevantes
+ * @param {Array} historicoConversa - Histórico recente da conversa
+ * @param {Object} userSettings - Configurações do usuário
+ * @returns {Promise<string>} - Resposta gerada
+ */
 async function gerarResposta(pergunta, documentos, historicoConversa, userSettings) {
   try {
     return await responseGenerator.gerar(pergunta, documentos, historicoConversa, userSettings);
@@ -150,26 +169,39 @@ async function gerarResposta(pergunta, documentos, historicoConversa, userSettin
   }
 }
 
+/**
+ * Função principal para processar mensagens recebidas
+ * @param {Object} req - Requisição HTTP
+ * @param {Object} res - Resposta HTTP
+ * @returns {Promise<void>}
+ */
 async function processarMensagem(req, res) {
   try {
     const mensagem = req.body.Body;
     const telefone = req.body.From;
-
+    
+    // Resposta imediata para o Twilio
     res.set('Content-Type', 'text/xml');
     res.send('<Response></Response>');
-
+    
+    // Feedback imediato para o usuário
     await enviarMensagem(twilioClient, telefone, "Estou pensando...");
-
+    
+    // Processar comandos especiais
     if (mensagem.startsWith('/config')) {
       await processarComandoConfig(telefone, mensagem);
       return;
     }
-
+    
+    // Obter histórico recente da conversa
     const historicoConversa = await firebase.obterHistoricoRecente(telefone, 5);
+    
+    // Obter configurações do usuário
     const userSettings = await firebase.getUserSettings(telefone);
-
+    
+    // Verificar se a pergunta está no domínio relevante
     const dentroDoEscopo = await verificarDominio(mensagem);
-
+    
     if (!dentroDoEscopo) {
       await enviarMensagem(
         twilioClient,
@@ -178,16 +210,25 @@ async function processarMensagem(req, res) {
       );
       return;
     }
-
+    
+    // Buscar documentos relevantes
     const documentosRelevantes = await buscarDocumentosRelevantes(mensagem);
+    
+    // Gerar resposta
     const resposta = await gerarResposta(mensagem, documentosRelevantes, historicoConversa, userSettings);
+    
+    // Enviar resposta
     await enviarMensagem(twilioClient, telefone, resposta);
-
+    
+    // Salvar no histórico
     const documentosUsados = documentosRelevantes.map(doc => doc.id);
     await firebase.salvarHistoricoConversa(telefone, mensagem, resposta, documentosUsados);
+    
   } catch (error) {
     console.error('❌ Erro ao processar mensagem:', error);
+    
     try {
+      // Tentar enviar mensagem de erro para o usuário
       await enviarMensagem(
         twilioClient,
         req.body.From,
