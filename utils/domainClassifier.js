@@ -4,10 +4,10 @@ require('dotenv').config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-async function classifyQuery(query) {
+async function classificar(query) {
   try {
     console.log(`🔍 Classificando pergunta: "${query}"`);
-    
+
     const response = await openai.chat.completions.create({
       model: "gpt-4-turbo",
       messages: [
@@ -25,17 +25,16 @@ async function classifyQuery(query) {
       temperature: 0.1,
       max_tokens: 5
     });
-    
+
     const classification = response.choices[0].message.content.trim().toLowerCase();
     const isInDomain = classification.includes('sim');
-    
+
     console.log(`📊 Classificação: ${isInDomain ? 'Dentro do domínio' : 'Fora do domínio'}`);
     return isInDomain;
   } catch (error) {
     console.error('❌ Erro ao classificar pergunta:', error.message);
-    // Em caso de erro, assumimos que está no domínio para evitar falsos negativos
     return true;
   }
 }
 
-module.exports = { classifyQuery };
+module.exports = { classificar };
