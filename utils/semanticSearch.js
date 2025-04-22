@@ -4,7 +4,7 @@ const firebase = require('../services/firebaseService');
 require('dotenv').config();
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const SIMILARITY_THRESHOLD = 0.3; // Reduzido para ser mais permissivo
+const SIMILARITY_THRESHOLD = 0.3;
 
 function cosineSimilarity(vecA, vecB) {
   try {
@@ -14,66 +14,55 @@ function cosineSimilarity(vecA, vecB) {
     return dotProduct / (magnitudeA * magnitudeB);
   } catch (error) {
     console.error('❌ Erro ao calcular similaridade:', error.message);
-    return 0; // Retorna 0 em caso de erro
+    return 0;
   }
 }
 
-async function searchDocuments(query, limit = 3) {
+async function buscar(query, limit = 3) {
   try {
     console.log(`🔎 Buscando documentos para: "${query}"`);
-    
-    // Gerar embedding para a pergunta
+
     const response = await openai.embeddings.create({
       model: 'text-embedding-ada-002',
       input: query
     });
     const queryEmbedding = response.data[0].embedding;
-    
-    // Buscar todos os documentos da base
+
     console.log('📚 Recuperando documentos do Firebase...');
     const documents = await firebase.getDocuments();
     console.log(`📊 Recuperados ${documents.length} documentos`);
-    
+
     if (documents.length === 0) {
       console.warn('⚠️ Nenhum documento disponível para busca');
       return [];
     }
-    
-    // Calcular similaridade com cada documento
+
     console.log('🧮 Calculando similaridades...');
     const scoredDocs = [];
-    
+
     for (const doc of documents) {
       if (!doc.embedding || !Array.isArray(doc.embedding)) {
         console.warn(`⚠️ Documento ${doc.id} sem embedding válido`);
         continue;
       }
-      
+
       const similarity = cosineSimilarity(queryEmbedding, doc.embedding);
-      scoredDocs.push({
-        ...doc,
-        similarity
-      });
+      scoredDocs.push({ ...doc, similarity });
     }
-    
-    // Ordenar por similaridade e pegar os top N
+
     const topResults = scoredDocs
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, limit);
-    
-    // Verificar se os resultados atingem o limiar mínimo
+
     if (topResults.length > 0 && topResults[0].similarity >= SIMILARITY_THRESHOLD) {
       console.log(`✅ Encontrados ${topResults.length} documentos relevantes`);
-      
-      // Log detalhado dos documentos encontrados
       topResults.forEach((doc, index) => {
-        console.log(`📄 #${index+1}: "${doc.title ? doc.title.substring(0, 30) : 'Sem título'}..." (${doc.similarity.toFixed(3)})`);
+        console.log(`📄 #${index + 1}: "${doc.title ? doc.title.substring(0, 30) : 'Sem título'}..." (${doc.similarity.toFixed(3)})`);
       });
-      
+
       return topResults;
     } else {
-      // Se o melhor resultado não atingir o limiar
-      console.warn(`⚠️ Melhor similaridade (${topResults.length > 0 ? topResults[0].similarity.toFixed(3) : 'N/A'}) abaixo do limiar (${SIMILARITY_THRESHOLD}). Usando fallback.`);
+      console.warn(`⚠️ Similaridade abaixo do limiar (${SIMILARITY_THRESHOLD}). Usando fallback.`);
       return [];
     }
   } catch (error) {
@@ -82,4 +71,4 @@ async function searchDocuments(query, limit = 3) {
   }
 }
 
-module.exports = { searchDocuments };
+module.exports = { buscar };
