@@ -26,16 +26,21 @@ async function enviarMensagem(client, para, mensagem) {
   try {
     // Garantir que o número está no formato correto para o WhatsApp
     const paraFormatado = para.startsWith('whatsapp:') ? para : `whatsapp:${para}`;
-    const fromNumber = `whatsapp:${process.env.TWILIO_PHONE_NUMBER || '+14155238886'}`;
     
-    console.log(`📤 Enviando mensagem para ${paraFormatado} via ${fromNumber}`);
+    // Corrigido: Não duplicar o prefixo whatsapp:
+    const fromNumber = process.env.TWILIO_PHONE_NUMBER || '+14155238886';
+    const fromFormatado = fromNumber.startsWith('whatsapp:') 
+      ? fromNumber 
+      : `whatsapp:${fromNumber}`;
+    
+    console.log(`📤 Enviando mensagem para ${paraFormatado} via ${fromFormatado}`);
     
     // Dividir mensagem em partes se for muito grande
     if (mensagem.length <= WHATSAPP_CHARACTER_LIMIT) {
       console.log(`📨 Enviando mensagem única (${mensagem.length} caracteres)`);
       const message = await client.messages.create({
         body: mensagem,
-        from: fromNumber,
+        from: fromFormatado,
         to: paraFormatado
       });
       console.log(`✅ Mensagem enviada com sucesso - SID: ${message.sid}`);
@@ -55,7 +60,7 @@ async function enviarMensagem(client, para, mensagem) {
         
         const message = await client.messages.create({
           body: parte,
-          from: fromNumber,
+          from: fromFormatado,
           to: paraFormatado
         });
         
@@ -210,9 +215,16 @@ async function processarMensagem(req, res) {
     console.log(`🔎 Buscando documentos para: "${mensagem}"`);
     const documentosRelevantes = await buscarDocumentosRelevantes(mensagem);
     
-    documentosRelevantes.forEach((doc, i) => {
-      console.log(`📄 #${i+1}: "${doc.titulo?.substring(0, 30)}..." (${doc.score.toFixed(3)})`);
-    });
+    // Corrigido: Verificação segura de propriedades dos documentos
+    if (documentosRelevantes && documentosRelevantes.length > 0) {
+      documentosRelevantes.forEach((doc, i) => {
+        const titulo = doc.titulo || doc.title || 'Documento sem título';
+        const score = doc.score || doc.similaridade || 0;
+        console.log(`📄 #${i+1}: "${titulo.substring(0, 30)}..." (${score.toFixed(3)})`);
+      });
+    } else {
+      console.log('⚠️ Nenhum documento relevante encontrado');
+    }
     
     // Preparar para gerar resposta
     console.log(`🤔 Gerando resposta para: "${mensagem}"`);
@@ -244,7 +256,7 @@ async function processarMensagem(req, res) {
     }
     
     // Salvar no histórico
-    const documentosUsados = documentosRelevantes.map(doc => doc.id);
+    const documentosUsados = documentosRelevantes ? documentosRelevantes.map(doc => doc.id || '') : [];
     await firebase.salvarHistoricoConversa(telefone, mensagem, resposta, documentosUsados);
     console.log(`✅ Histórico salvo para usuário ${telefone.replace(/\D/g, '')}`);
     
