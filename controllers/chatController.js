@@ -35,6 +35,12 @@ async function enviarMensagem(client, para, mensagem) {
     
     console.log(`📤 Enviando mensagem para ${paraFormatado} via ${fromFormatado}`);
     
+    // Verificar se a mensagem é válida
+    if (!mensagem || typeof mensagem !== 'string' || mensagem.length === 0) {
+      console.error('❌ Tentativa de envio de mensagem inválida:', mensagem);
+      return false;
+    }
+    
     // Dividir mensagem em partes se for muito grande
     if (mensagem.length <= WHATSAPP_CHARACTER_LIMIT) {
       console.log(`📨 Enviando mensagem única (${mensagem.length} caracteres)`);
@@ -215,7 +221,7 @@ async function processarMensagem(req, res) {
     console.log(`🔎 Buscando documentos para: "${mensagem}"`);
     const documentosRelevantes = await buscarDocumentosRelevantes(mensagem);
     
-    // Corrigido: Verificação segura de propriedades dos documentos
+    // Verificação segura de propriedades dos documentos
     if (documentosRelevantes && documentosRelevantes.length > 0) {
       documentosRelevantes.forEach((doc, i) => {
         const titulo = doc.titulo || doc.title || 'Documento sem título';
@@ -230,18 +236,33 @@ async function processarMensagem(req, res) {
     console.log(`🤔 Gerando resposta para: "${mensagem}"`);
     
     // Gerar resposta
-    let resposta;
+    let respostaObj;
+    let respostaTexto;
     try {
-      resposta = await gerarResposta(mensagem, documentosRelevantes, historicoConversa, userSettings);
-      console.log(`✅ Resposta gerada: ${resposta.length} caracteres`);
+      respostaObj = await responseGenerator.gerar(mensagem, documentosRelevantes, historicoConversa, userSettings);
+      
+      // CORREÇÃO: Extrair a resposta em texto do objeto retornado
+      if (respostaObj && typeof respostaObj === 'object' && 'response' in respostaObj) {
+        respostaTexto = respostaObj.response;
+        console.log(`✅ Resposta gerada: ${respostaTexto.length} caracteres`);
+      } else {
+        console.log('⚠️ Formato de resposta inesperado:', respostaObj);
+        respostaTexto = "Desculpe, ocorreu um erro ao processar sua pergunta. Por favor, tente novamente.";
+      }
     } catch (error) {
       console.error('❌ Erro ao gerar resposta:', error);
-      resposta = "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente reformular sua pergunta.";
+      respostaTexto = "Desculpe, ocorreu um erro ao gerar a resposta. Por favor, tente reformular sua pergunta.";
+    }
+    
+    // Verificar se a resposta é válida
+    if (!respostaTexto || typeof respostaTexto !== 'string') {
+      console.error('⚠️ Resposta inválida, usando resposta padrão');
+      respostaTexto = "Desculpe, não consegui gerar uma resposta adequada para sua pergunta. Por favor, tente reformular ou faça outra pergunta.";
     }
     
     // Enviar resposta
-    console.log(`📤 Enviando resposta final (${resposta.length} caracteres)`);
-    const enviado = await enviarMensagem(twilioClient, telefone, resposta);
+    console.log(`📤 Enviando resposta final (${respostaTexto.length} caracteres)`);
+    const enviado = await enviarMensagem(twilioClient, telefone, respostaTexto);
     
     if (enviado) {
       console.log(`✅ Resposta enviada com sucesso para ${telefone}`);
@@ -256,8 +277,8 @@ async function processarMensagem(req, res) {
     }
     
     // Salvar no histórico
-    const documentosUsados = documentosRelevantes ? documentosRelevantes.map(doc => doc.id || '') : [];
-    await firebase.salvarHistoricoConversa(telefone, mensagem, resposta, documentosUsados);
+    const documentosUsados = respostaObj && respostaObj.documents ? respostaObj.documents.map(doc => doc.id || '') : [];
+    await firebase.salvarHistoricoConversa(telefone, mensagem, respostaTexto, documentosUsados);
     console.log(`✅ Histórico salvo para usuário ${telefone.replace(/\D/g, '')}`);
     
   } catch (error) {
@@ -312,7 +333,7 @@ async function buscarDocumentosRelevantes(pergunta) {
  * @param {Array} documentos - Documentos relevantes
  * @param {Array} historicoConversa - Histórico recente da conversa
  * @param {Object} userSettings - Configurações do usuário
- * @returns {Promise<string>} - Resposta gerada
+ * @returns {Promise<Object>} - Objeto com resposta gerada e metadados
  */
 async function gerarResposta(pergunta, documentos, historicoConversa, userSettings) {
   try {
