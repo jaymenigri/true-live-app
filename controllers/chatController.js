@@ -214,21 +214,24 @@ async function processarMensagem(req, res) {
     // Verificar se a pergunta está no domínio relevante
     console.log(`🔍 Classificando pergunta: "${mensagem}"`);
     
-    // Primeiro, tentar analisar contexto para perguntas que possam conter referências
-    let perguntaParaClassificar = mensagem;
-    if (historicoConversa.length > 0 && 
-        (mensagem.toLowerCase().includes('sua') || 
-         mensagem.toLowerCase().includes('dele') || 
-         mensagem.toLowerCase().includes('dela') || 
-         mensagem.toLowerCase().includes('seu'))) {
+    // Se houver histórico, classifique considerando o contexto
+    let dentroDoEscopo = false;
+    if (historicoConversa.length > 0) {
+      // Preparar contexto estruturado para o classificador
+      let contextoPergunta = "CONVERSA ANTERIOR:\n\n";
+      historicoConversa.slice(-3).forEach(msg => {  // Últimas 3 mensagens para contexto
+        if (msg.pergunta && msg.resposta) {
+          contextoPergunta += `Usuário: ${msg.pergunta}\nAssistente: ${msg.resposta}\n\n`;
+        }
+      });
+      contextoPergunta += `Usuário: ${mensagem}`;
       
-      console.log('🔄 Pergunta pode conter referência. Analisando contexto antes de classificar...');
-      
-      // Aqui poderíamos chamar um serviço para contextualizar a pergunta antes da classificação
-      // Por enquanto, vamos continuar com a pergunta original
+      dentroDoEscopo = await verificarDominio(contextoPergunta);
+    } else {
+      // Sem histórico, classifique apenas a pergunta
+      dentroDoEscopo = await verificarDominio(mensagem);
     }
     
-    const dentroDoEscopo = await verificarDominio(perguntaParaClassificar);
     console.log(`📊 Classificação: ${dentroDoEscopo ? 'Dentro do domínio' : 'Fora do domínio'}`);
     
     if (!dentroDoEscopo) {
