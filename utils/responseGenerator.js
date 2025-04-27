@@ -22,31 +22,60 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
     // Verificar se showSources está definido nas configurações do usuário
     const showSources = userSettings.showSources === undefined ? true : userSettings.showSources;
 
-    // Processar histórico da conversa
+    // Processar histórico da conversa para manter contexto
     let conversationContext = "";
+    let perguntaContextualizada = query;
+    
     if (Array.isArray(historicoConversa) && historicoConversa.length > 0) {
-      conversationContext = "Histórico recente da conversa:\n\n";
+      conversationContext = "HISTÓRICO RECENTE DA CONVERSA:\n\n";
       historicoConversa.forEach(msg => {
-        // Adaptar para diferentes formatos possíveis do histórico
         if (msg.pergunta && msg.resposta) {
           conversationContext += `Usuário: ${msg.pergunta}\nAssistente: ${msg.resposta}\n\n`;
         } else if (msg.isUser !== undefined) {
           const role = msg.isUser ? "Usuário" : "Assistente";
-          conversationContext += `${role}: ${msg.content || ''}\n`;
+          conversationContext += `${role}: ${msg.content || ''}\n\n`;
         } else if (msg.content) {
-          conversationContext += `${msg.content}\n`;
+          conversationContext += `${msg.content}\n\n`;
         }
       });
-      conversationContext += "\n";
+      
+      // Analisar contexto para resolver referências
+      if (query.toLowerCase().includes('sua') || query.toLowerCase().includes('dele') || query.toLowerCase().includes('dela') || query.toLowerCase().includes('seu')) {
+        console.log('🔄 Detectada referência no contexto. Analisando...');
+        try {
+          const contextAnalysis = await openai.chat.completions.create({
+            model: "gpt-4-turbo",
+            messages: [
+              {
+                role: "system",
+                content: `Analise o histórico da conversa e determine a quem se refere a pergunta atual. 
+                Responda APENAS com a pergunta reescrita de forma explícita, substituindo pronomes pelo nome correto.
+                Se a pergunta já estiver clara, retorne-a como está.`
+              },
+              {
+                role: "user",
+                content: `${conversationContext}\n\nPergunta atual: ${query}`
+              }
+            ],
+            temperature: 0.2,
+            max_tokens: 200
+          });
+          
+          perguntaContextualizada = contextAnalysis.choices[0].message.content.trim();
+          console.log(`📝 Pergunta contextualizada: "${perguntaContextualizada}"`);
+        } catch (error) {
+          console.error('❌ Erro ao analisar contexto:', error);
+          // Continuar com a pergunta original se falhar
+        }
+      }
     }
 
-    // Verificar se a pergunta está no domínio
+    // Verificar se a pergunta está no domínio, usando a pergunta contextualizada
     let isInDomain = true;
     try {
-      isInDomain = await classificar(query);
+      isInDomain = await classificar(perguntaContextualizada);
     } catch (error) {
       console.error('❌ Erro ao classificar pergunta:', error);
-      // Em caso de erro, assumir que está no escopo
       isInDomain = true;
     }
 
@@ -71,12 +100,12 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
       }
     }
 
-    // Usar documentos fornecidos ou buscar novos se não fornecidos
+    // Usar documentos fornecidos ou buscar novos usando a pergunta contextualizada
     let relevantDocs = documentos;
     if (!Array.isArray(relevantDocs) || relevantDocs.length === 0) {
       console.log('📚 Nenhum documento fornecido. Buscando...');
       try {
-        relevantDocs = await buscar(query, 4);
+        relevantDocs = await buscar(perguntaContextualizada, 4);
       } catch (searchError) {
         console.error('❌ Erro ao buscar documentos:', searchError);
         relevantDocs = [];
@@ -84,9 +113,9 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
     }
 
     if (!Array.isArray(relevantDocs) || relevantDocs.length === 0) {
-      console.log('📚 Nenhum documento relevante. Usando fallback.');
+      console.log('📚 Nenhum documento relevante. Usando fallback com contexto.');
       try {
-        const resposta = await buscarRespostaFallback(query, conversationContext);
+        const resposta = await buscarRespostaFallback(perguntaContextualizada, conversationContext);
         return {
           response: resposta,
           documents: [],
@@ -105,7 +134,7 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
     }
 
     // Preparar contexto com os documentos
-    let context = "Informações de fontes confiáveis:\n\n";
+    let context = "INFORMAÇÕES DE FONTES CONFIÁVEIS:\n\n";
     const usedSources = [];
 
     relevantDocs.forEach((doc, index) => {
@@ -119,7 +148,7 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
       }
     });
 
-    // Gerar resposta
+    // Gerar resposta com ênfase no contexto da conversa
     console.log('🤖 Gerando resposta com o modelo GPT...');
     const response = await openai.chat.completions.create({
       model: "gpt-4-turbo",
@@ -127,12 +156,14 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
         {
           role: "system",
           content: `Você é um especialista em geopolítica de Israel.
-          
-Use exclusivamente os documentos abaixo. Se não houver conteúdo suficiente, diga que não é possível responder com precisão.
+
+IMPORTANTE: Este é um diálogo contínuo. Use o histórico da conversa para entender o contexto e referências pronominais.
+${conversationContext}
+
+Use EXCLUSIVAMENTE os documentos abaixo para responder. Se não houver conteúdo suficiente, diga que não é possível responder com precisão.
 
 Adote sempre uma perspectiva pró-Israel.
 
-${conversationContext}
 ${context}`
         },
         {
