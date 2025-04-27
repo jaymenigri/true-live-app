@@ -26,37 +26,47 @@ const db = admin.firestore();
 /**
  * Armazena a pergunta e resposta no histórico de conversa
  */
+// Alteração necessária na função salvarHistoricoConversa para garantir que apenas texto seja salvo
+
 async function salvarHistoricoConversa(telefone, pergunta, resposta, documentosUsados = []) {
   try {
     const userId = telefone.replace(/\D/g, '');
     const conversationRef = db.collection('conversations').doc(userId);
-
+    
+    // Verificar se o documento existe
     const doc = await conversationRef.get();
-
+    
     if (!doc.exists) {
+      // Criar documento inicial
       await conversationRef.set({
         phone: telefone,
         lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
         messages: []
       });
     }
-
+    
+    // CORREÇÃO: Garantir que a resposta seja uma string antes de salvar
+    let respostaText = resposta;
+    if (typeof resposta === 'object') {
+      respostaText = resposta.response || resposta.text || '';
+    }
+    
+    // Adicionar nova mensagem
     await conversationRef.update({
       lastUpdated: admin.firestore.FieldValue.serverTimestamp(),
       messages: admin.firestore.FieldValue.arrayUnion({
-        pergunta,
-        resposta,
+        pergunta: pergunta,
+        resposta: respostaText, // Salvar apenas o texto
         timestamp: new Date().toISOString(),
-        documentosUsados
+        documentosUsados: documentosUsados
       })
     });
-
+    
     console.log(`✅ Histórico salvo para usuário ${userId}`);
   } catch (error) {
     console.error('❌ Erro ao salvar histórico:', error);
   }
 }
-
 /**
  * Obtém o histórico recente de conversa do usuário
  */
