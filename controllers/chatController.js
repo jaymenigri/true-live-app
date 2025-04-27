@@ -221,7 +221,12 @@ async function processarMensagem(req, res) {
       let contextoPergunta = "CONVERSA ANTERIOR:\n\n";
       historicoConversa.slice(-3).forEach(msg => {  // Últimas 3 mensagens para contexto
         if (msg.pergunta && msg.resposta) {
-          contextoPergunta += `Usuário: ${msg.pergunta}\nAssistente: ${msg.resposta}\n\n`;
+          // Extrair texto se resposta for objeto
+          let respostaText = msg.resposta;
+          if (typeof msg.resposta === 'object') {
+            respostaText = msg.resposta.response || msg.resposta.text || JSON.stringify(msg.resposta);
+          }
+          contextoPergunta += `Usuário: ${msg.pergunta}\nAssistente: ${respostaText}\n\n`;
         }
       });
       contextoPergunta += `Usuário: ${mensagem}`;
@@ -303,7 +308,7 @@ async function processarMensagem(req, res) {
       );
     }
     
-    // Salvar no histórico
+    // Salvar no histórico - garantir que salva apenas o texto da resposta
     const documentosUsados = respostaObj && respostaObj.documents ? respostaObj.documents.map(doc => doc.id || '') : [];
     await firebase.salvarHistoricoConversa(telefone, mensagem, respostaTexto, documentosUsados);
     console.log(`✅ Histórico salvo para usuário ${telefone.replace(/\D/g, '')}`);
