@@ -189,9 +189,17 @@ async function processarMensagem(req, res) {
       return;
     }
     
-    // Obter histórico recente da conversa
-    const historicoConversa = await firebase.obterHistoricoRecente(telefone, 5);
+    // Obter histórico recente da conversa - aumentar para mais mensagens para melhor contexto
+    const historicoConversa = await firebase.obterHistoricoRecente(telefone, 10);
     console.log(`📚 Histórico recuperado: ${historicoConversa.length} mensagens anteriores`);
+    
+    // Log detalhado do histórico para debug
+    if (historicoConversa.length > 0) {
+      console.log('🔍 Histórico da conversa:');
+      historicoConversa.forEach((msg, index) => {
+        console.log(`  ${index + 1}. ${msg.pergunta ? 'Pergunta: ' + msg.pergunta.substring(0, 50) : 'Mensagem'}`);
+      });
+    }
     
     // Obter configurações do usuário
     let userSettings = {};
@@ -205,7 +213,22 @@ async function processarMensagem(req, res) {
     
     // Verificar se a pergunta está no domínio relevante
     console.log(`🔍 Classificando pergunta: "${mensagem}"`);
-    const dentroDoEscopo = await verificarDominio(mensagem);
+    
+    // Primeiro, tentar analisar contexto para perguntas que possam conter referências
+    let perguntaParaClassificar = mensagem;
+    if (historicoConversa.length > 0 && 
+        (mensagem.toLowerCase().includes('sua') || 
+         mensagem.toLowerCase().includes('dele') || 
+         mensagem.toLowerCase().includes('dela') || 
+         mensagem.toLowerCase().includes('seu'))) {
+      
+      console.log('🔄 Pergunta pode conter referência. Analisando contexto antes de classificar...');
+      
+      // Aqui poderíamos chamar um serviço para contextualizar a pergunta antes da classificação
+      // Por enquanto, vamos continuar com a pergunta original
+    }
+    
+    const dentroDoEscopo = await verificarDominio(perguntaParaClassificar);
     console.log(`📊 Classificação: ${dentroDoEscopo ? 'Dentro do domínio' : 'Fora do domínio'}`);
     
     if (!dentroDoEscopo) {
@@ -234,14 +257,15 @@ async function processarMensagem(req, res) {
     
     // Preparar para gerar resposta
     console.log(`🤔 Gerando resposta para: "${mensagem}"`);
+    console.log(`📝 Com histórico: ${historicoConversa.length} mensagens anteriores`);
     
-    // Gerar resposta
+    // Gerar resposta passando o histórico completo
     let respostaObj;
     let respostaTexto;
     try {
       respostaObj = await responseGenerator.gerar(mensagem, documentosRelevantes, historicoConversa, userSettings);
       
-      // CORREÇÃO: Extrair a resposta em texto do objeto retornado
+      // Extrair a resposta em texto do objeto retornado
       if (respostaObj && typeof respostaObj === 'object' && 'response' in respostaObj) {
         respostaTexto = respostaObj.response;
         console.log(`✅ Resposta gerada: ${respostaTexto.length} caracteres`);
