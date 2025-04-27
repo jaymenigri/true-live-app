@@ -8,6 +8,19 @@ require('dotenv').config();
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
+ * Detecta o idioma da mensagem do usuário
+ * @param {string} text - Texto para analisar
+ * @returns {string} - Código do idioma ('pt', 'es', 'en', etc)
+ */
+function detectLanguage(text) {
+  // Heurística simples para detectar idiomas principais
+  if (/¿.+\?/.test(text) || /ñ/.test(text)) return 'es';
+  if (/\w+\?\s*$/.test(text) && text.split(' ').some(word => ['who', 'what', 'when', 'where', 'why', 'how'].includes(word.toLowerCase()))) return 'en';
+  if (/\w+\?\s*$/.test(text) && text.includes('é') || text.includes('ç')) return 'pt';
+  return 'pt'; // Português como padrão
+}
+
+/**
  * Gera resposta com base na pergunta do usuário
  * @param {string} query - Pergunta do usuário
  * @param {Array} documentos - Documentos relevantes (opcional)
@@ -19,25 +32,38 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
   try {
     console.log(`🤔 Gerando resposta para: "${query}"`);
 
-    // Verificar se showSources está definido nas configurações do usuário
+    // Detectar idioma da pergunta
+    const userLanguage = detectLanguage(query);
     const showSources = userSettings.showSources === undefined ? false : userSettings.showSources;
 
-    // Preparar contexto da conversa
+    // Preparar contexto da conversa corretamente
     let conversationContext = "";
+    let lastSubject = null;
+    
     if (Array.isArray(historicoConversa) && historicoConversa.length > 0) {
       conversationContext = "CONVERSA ANTERIOR:\n\n";
       historicoConversa.forEach(msg => {
         if (msg.pergunta && msg.resposta) {
-          // Garantir que resposta seja uma string
-          const respostaText = typeof msg.resposta === 'object' 
-            ? (msg.resposta.response || msg.resposta.text || JSON.stringify(msg.resposta))
-            : msg.resposta;
+          // Extrair texto de respostas que são objetos
+          let respostaText = msg.resposta;
+          if (typeof msg.resposta === 'object') {
+            respostaText = msg.resposta.response || msg.resposta.text || '';
+          }
+          
           conversationContext += `Usuário: ${msg.pergunta}\nAssistente: ${respostaText}\n\n`;
+          
+          // Identificar último sujeito discutido
+          if (msg.pergunta.toLowerCase().includes('quem')) {
+            const subjectMatch = respostaText.match(/^([\w\s]+) (?:foi|é|era)/);
+            if (subjectMatch) {
+              lastSubject = subjectMatch[1];
+            }
+          }
         }
       });
     }
 
-    // Verificar se a pergunta está no domínio, considerando o contexto
+    // Verificar se a pergunta está no domínio
     let isInDomain = true;
     if (conversationContext) {
       const contextAwareQuestion = `${conversationContext}\nUsuário: ${query}`;
@@ -57,11 +83,11 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
       };
     }
 
-    // Para perguntas contextuais, tentar enriquecer a busca
+    // Para perguntas contextuais, enriquecer a busca
     let searchQuery = query;
-    if (conversationContext && query.toLowerCase().includes('sua') || query.toLowerCase().includes('dele') || query.toLowerCase().includes('dela')) {
-      console.log('🔍 Detectada referência contextual. Buscando com contexto...');
-      searchQuery = `${conversationContext}\nUsuário: ${query}`;
+    if (lastSubject && (query.toLowerCase().includes('sua') || query.toLowerCase().includes('dele') || query.toLowerCase().includes('dela'))) {
+      console.log(`🔍 Detectada referência a: ${lastSubject}`);
+      searchQuery = `${query} ${lastSubject}`;
     }
 
     // Buscar documentos relevantes
@@ -69,12 +95,6 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
     if (!Array.isArray(relevantDocs) || relevantDocs.length === 0) {
       console.log('📚 Buscando documentos...');
       relevantDocs = await buscar(searchQuery, 4);
-    }
-
-    // Se não encontrar documentos relevantes com a busca contextual, tentar busca simples
-    if ((!relevantDocs || relevantDocs.length === 0) && searchQuery !== query) {
-      console.log('🔄 Tentando busca simples sem contexto...');
-      relevantDocs = await buscar(query, 4);
     }
 
     if (!Array.isArray(relevantDocs) || relevantDocs.length === 0) {
@@ -95,15 +115,24 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
     relevantDocs.forEach((doc, index) => {
       const source = doc.source || doc.fonte || "Fonte desconhecida";
       const content = doc.content || doc.conteudo || "";
+      const score = doc.score || doc.similaridade || 0;
       
-      if (content) {
-        context += `--- Fonte: ${source} ---\n`;
+      // Só incluir documentos com score relevante
+      if (content && score > 0.5) {
+        context += `--- Fonte: ${source} (Relevância: ${score.toFixed(2)}) ---\n`;
         context += content.slice(0, 1500) + "\n\n";
         if (!usedSources.includes(source)) usedSources.push(source);
       }
     });
 
-    // Gerar resposta com prompt mais detalhado para contexto
+    // Instrução específica para o idioma
+    const languageInstruction = userLanguage === 'es' 
+      ? "Responde en español." 
+      : userLanguage === 'en' 
+      ? "Respond in English." 
+      : "Responda em português.";
+
+    // Gerar resposta com prompt detalhado
     console.log('🤖 Gerando resposta contextual...');
     const response = await openai.chat.completions.create({
       model: "gpt-4-turbo",
@@ -112,15 +141,18 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
           role: "system",
           content: `Você é o True Live, um assistente especializado em Israel, judaísmo e geopolítica do Oriente Médio.
 
+${languageInstruction}
+
 CONTEXTO DA CONVERSA:
 ${conversationContext}
 
 REGRAS:
-1. Esta é uma conversa em andamento. Resolva referências pronominais (sua, dele, dela) com base no contexto.
+1. Esta é uma conversa em andamento. Resolva referências pronominais com base no contexto.
 2. Use EXCLUSIVAMENTE as informações dos documentos fornecidos para responder.
 3. Se a pergunta se refere a algo mencionado anteriormente, identifique corretamente o sujeito.
-4. Seja preciso com datas e fatos. Se não tiver informação exata, diga que não sabe.
-5. Mantenha sempre uma perspectiva pró-Israel.
+4. Seja preciso com datas, nomes e fatos. Se não tiver informação exata, diga que não sabe.
+5. Mantenha sempre uma perspectiva pró-Israel equilibrada e factual.
+6. Para notícias recentes, seja transparente sobre a data limite do seu conhecimento.
 
 DOCUMENTOS DISPONÍVEIS:
 ${context}`
@@ -139,7 +171,8 @@ ${context}`
 
     // Adicionar fontes se configurado
     if (showSources && usedSources.length > 0) {
-      finalResponse += "\n\n📚 Fontes consultadas:";
+      const sourcesHeader = userLanguage === 'es' ? "📚 Fuentes consultadas:" : "📚 Fontes consultadas:";
+      finalResponse += `\n\n${sourcesHeader}`;
       usedSources.forEach(source => {
         finalResponse += `\n- ${source}`;
       });
