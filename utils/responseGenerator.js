@@ -22,119 +22,64 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
     // Verificar se showSources está definido nas configurações do usuário
     const showSources = userSettings.showSources === undefined ? true : userSettings.showSources;
 
-    // Processar histórico da conversa para manter contexto
+    // Preparar contexto da conversa - deixar a IA entender naturalmente
     let conversationContext = "";
-    let perguntaContextualizada = query;
-    
     if (Array.isArray(historicoConversa) && historicoConversa.length > 0) {
-      conversationContext = "HISTÓRICO RECENTE DA CONVERSA:\n\n";
+      conversationContext = "CONVERSA ANTERIOR:\n\n";
       historicoConversa.forEach(msg => {
         if (msg.pergunta && msg.resposta) {
           conversationContext += `Usuário: ${msg.pergunta}\nAssistente: ${msg.resposta}\n\n`;
-        } else if (msg.isUser !== undefined) {
-          const role = msg.isUser ? "Usuário" : "Assistente";
-          conversationContext += `${role}: ${msg.content || ''}\n\n`;
-        } else if (msg.content) {
-          conversationContext += `${msg.content}\n\n`;
         }
       });
-      
-      // Analisar contexto para resolver referências
-      if (query.toLowerCase().includes('sua') || query.toLowerCase().includes('dele') || query.toLowerCase().includes('dela') || query.toLowerCase().includes('seu')) {
-        console.log('🔄 Detectada referência no contexto. Analisando...');
-        try {
-          const contextAnalysis = await openai.chat.completions.create({
-            model: "gpt-4-turbo",
-            messages: [
-              {
-                role: "system",
-                content: `Analise o histórico da conversa e determine a quem se refere a pergunta atual. 
-                Responda APENAS com a pergunta reescrita de forma explícita, substituindo pronomes pelo nome correto.
-                Se a pergunta já estiver clara, retorne-a como está.`
-              },
-              {
-                role: "user",
-                content: `${conversationContext}\n\nPergunta atual: ${query}`
-              }
-            ],
-            temperature: 0.2,
-            max_tokens: 200
-          });
-          
-          perguntaContextualizada = contextAnalysis.choices[0].message.content.trim();
-          console.log(`📝 Pergunta contextualizada: "${perguntaContextualizada}"`);
-        } catch (error) {
-          console.error('❌ Erro ao analisar contexto:', error);
-          // Continuar com a pergunta original se falhar
-        }
-      }
     }
 
-    // Verificar se a pergunta está no domínio, usando a pergunta contextualizada
+    // Verificar se a pergunta está no domínio, considerando o contexto
     let isInDomain = true;
-    try {
-      isInDomain = await classificar(perguntaContextualizada);
-    } catch (error) {
-      console.error('❌ Erro ao classificar pergunta:', error);
-      isInDomain = true;
+    if (conversationContext) {
+      // Se há histórico, incluí-lo na classificação
+      try {
+        const contextAwareQuestion = `${conversationContext}\nUsuário: ${query}`;
+        isInDomain = await classificar(contextAwareQuestion);
+      } catch (error) {
+        console.error('❌ Erro ao classificar pergunta com contexto:', error);
+        isInDomain = await classificar(query);
+      }
+    } else {
+      isInDomain = await classificar(query);
     }
 
     if (!isInDomain) {
       console.log('🌐 Fora do domínio. Usando fallback.');
-      try {
-        const resposta = await buscarRespostaFallback(query, conversationContext);
-        return {
-          response: resposta,
-          documents: [],
-          usedFallback: true,
-          source: "Conhecimento geral (fora do domínio)"
-        };
-      } catch (fallbackError) {
-        console.error('❌ Erro no fallback:', fallbackError);
-        return {
-          response: "Desculpe, não tenho informações suficientes para responder a essa pergunta.",
-          documents: [],
-          usedFallback: true,
-          source: "Erro no fallback"
-        };
-      }
+      const resposta = await buscarRespostaFallback(query, conversationContext);
+      return {
+        response: resposta,
+        documents: [],
+        usedFallback: true,
+        source: "Conhecimento geral (fora do domínio)"
+      };
     }
 
-    // Usar documentos fornecidos ou buscar novos usando a pergunta contextualizada
+    // Buscar documentos relevantes - também considerando o contexto se disponível
     let relevantDocs = documentos;
     if (!Array.isArray(relevantDocs) || relevantDocs.length === 0) {
-      console.log('📚 Nenhum documento fornecido. Buscando...');
-      try {
-        relevantDocs = await buscar(perguntaContextualizada, 4);
-      } catch (searchError) {
-        console.error('❌ Erro ao buscar documentos:', searchError);
-        relevantDocs = [];
-      }
+      console.log('📚 Buscando documentos...');
+      const searchQuery = conversationContext ? `${conversationContext}\nUsuário: ${query}` : query;
+      relevantDocs = await buscar(searchQuery, 4);
     }
 
     if (!Array.isArray(relevantDocs) || relevantDocs.length === 0) {
-      console.log('📚 Nenhum documento relevante. Usando fallback com contexto.');
-      try {
-        const resposta = await buscarRespostaFallback(perguntaContextualizada, conversationContext);
-        return {
-          response: resposta,
-          documents: [],
-          usedFallback: true,
-          source: "Conhecimento geral (sem documentos específicos)"
-        };
-      } catch (fallbackError) {
-        console.error('❌ Erro no fallback:', fallbackError);
-        return {
-          response: "Desculpe, não encontrei informações específicas sobre esse assunto.",
-          documents: [],
-          usedFallback: true,
-          source: "Erro no fallback"
-        };
-      }
+      console.log('📚 Nenhum documento relevante. Usando fallback.');
+      const resposta = await buscarRespostaFallback(query, conversationContext);
+      return {
+        response: resposta,
+        documents: [],
+        usedFallback: true,
+        source: "Conhecimento geral (sem documentos específicos)"
+      };
     }
 
     // Preparar contexto com os documentos
-    let context = "INFORMAÇÕES DE FONTES CONFIÁVEIS:\n\n";
+    let context = "INFORMAÇÕES DAS FONTES CONFIÁVEIS:\n\n";
     const usedSources = [];
 
     relevantDocs.forEach((doc, index) => {
@@ -142,27 +87,28 @@ async function gerar(query, documentos = [], historicoConversa = [], userSetting
       const content = doc.content || doc.conteudo || "";
       
       if (content) {
-        context += `--- Documento ${index + 1} (Fonte: ${source}) ---\n`;
+        context += `--- Fonte: ${source} ---\n`;
         context += content.slice(0, 1500) + "\n\n";
         if (!usedSources.includes(source)) usedSources.push(source);
       }
     });
 
-    // Gerar resposta com ênfase no contexto da conversa
-    console.log('🤖 Gerando resposta com o modelo GPT...');
+    // Gerar resposta - deixar a IA entender o contexto naturalmente
+    console.log('🤖 Gerando resposta...');
     const response = await openai.chat.completions.create({
       model: "gpt-4-turbo",
       messages: [
         {
           role: "system",
-          content: `Você é um especialista em geopolítica de Israel.
+          content: `Você é o True Live, um assistente especializado em Israel, judaísmo e geopolítica do Oriente Médio.
 
-IMPORTANTE: Este é um diálogo contínuo. Use o histórico da conversa para entender o contexto e referências pronominais.
-${conversationContext}
+${conversationContext ? "Há uma conversa em andamento. Use o contexto para entender referências e manter a continuidade:\n" + conversationContext : ""}
 
-Use EXCLUSIVAMENTE os documentos abaixo para responder. Se não houver conteúdo suficiente, diga que não é possível responder com precisão.
-
-Adote sempre uma perspectiva pró-Israel.
+REGRAS IMPORTANTES:
+1. Use EXCLUSIVAMENTE as informações dos documentos fornecidos abaixo para responder.
+2. Se não houver informações suficientes nos documentos, diga claramente que não pode responder com precisão.
+3. Mantenha sempre uma perspectiva pró-Israel.
+4. Seja preciso e factual, citando as fontes quando relevante.
 
 ${context}`
         },
@@ -175,7 +121,7 @@ ${context}`
       max_tokens: 1000
     });
 
-    // Extrair e formatar a resposta
+    // Formatar a resposta
     let finalResponse = response.choices[0].message.content.trim();
 
     // Adicionar fontes se configurado
